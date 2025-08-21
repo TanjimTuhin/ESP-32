@@ -7,11 +7,11 @@
 #include "HardwareModule.h"
 
 struct ClientInfo {
-    WiFiClient client;
-    bool authenticated;
-    unsigned long lastHeartbeat;
-    String clientId;
-    bool active;
+    WiFiClient client;           // TCP client connection
+    bool authenticated;          // Authentication status
+    unsigned long lastHeartbeat; // Last activity timestamp
+    String clientId;            // Unique client identifier
+    bool active;                // Connection status
 };
 
 class CommunicationModule {
@@ -49,15 +49,22 @@ public:
     void update();
     
 private:
+    // Client management functions
     void handleNewClients();
     void handleClientMessages();
     void sendDataToClients();
     void removeInactiveClients();
+
+    // Message processing functions
     void processClientMessage(int clientIndex, String message);
     void sendResponse(int clientIndex, const String& response);
+    
+    // Authentication functions
     void sendAuthChallenge(int clientIndex);
     bool authenticateClient(int clientIndex, const String& password);
     void sendHeartbeat(int clientIndex);
+    
+    // JSON helper functions
     String createStatusJson();
     String createResponseJson(const String& status, const String& message);
     void printServerStatus();
