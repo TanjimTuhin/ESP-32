@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 
 class ESP32Client:
-    def __init__(self, host='192.168.4.1', port=8080, auth_password='IoTDevice2024'):
+    def __init__(self, host='192.168.10.89', port=8080, auth_password='IoTDevice2024'):
         self.host = host
         self.port = port
         self.auth_password = auth_password

@@ -17,7 +17,7 @@ struct ClientInfo {
 class CommunicationModule {
 private:
     // Network Configuration
-    const char* ssid = "ESP32";
+    const char* ssid = "SECL RnD LAB";
     const char* password = "SECL@2024";
     const char* auth_password = "IoTDevice2024";
     

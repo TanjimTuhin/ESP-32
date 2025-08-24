@@ -18,14 +18,22 @@ CommunicationModule::CommunicationModule(HardwareModule* hw)
 void CommunicationModule::init() {
     Serial.println("[COMM] Initializing Communication Module...");
     
-    // Setup WiFi Access Point
-    Serial.printf("[COMM] Setting up WiFi Access Point: %s\n", ssid);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ssid, password);
-    
-    IPAddress IP = WiFi.softAPIP();
-    Serial.printf("[COMM] Access Point IP: %s\n", IP.toString().c_str());
-    
+// Setup WiFi Station (connect to router)
+    Serial.printf("[COMM] Connecting to WiFi Router: %s\n", ssid);
+    WiFi.mode(WIFI_STA);                // Set ESP32 as station (client)
+    WiFi.begin(ssid, password);         // Connect to your router
+
+    // Wait for connection
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\n[COMM] Connected to router successfully!");
+
+    // Get assigned IP
+    IPAddress IP = WiFi.localIP();
+    Serial.printf("[COMM] Device IP: %s\n", IP.toString().c_str());
+
     // Start TCP server
     server.begin();
     Serial.printf("[COMM] TCP Server started on port %d\n", SERVER_PORT);
