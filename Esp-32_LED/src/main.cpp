@@ -11,8 +11,8 @@
  * - Modular design (separate .h and .cpp files)
  * 
  * Network Configuration:
- * - WiFi AP: ESP32_IoT_Server / ESP32Pass123
- * - Server: 192.168.4.1:8080
+ * - WiFi AP: SECL RnD LAB / SECL@2024     // WiFi STA
+ * - Server: 192.168.4.1:8080              // from serial monitor
  * - Auth Password: IoTDevice2024
  * 
  * Hardware Connections:

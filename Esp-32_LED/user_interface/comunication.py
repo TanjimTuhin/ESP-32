@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 
 class ESP32Client:
-    def __init__(self, host='192.168.10.89', port=8080, auth_password='IoTDevice2024'):
+    def __init__(self, host='192.168.10.113', port=8080, auth_password='IoTDevice2024'):
         self.host = host
         self.port = port
         self.auth_password = auth_password
@@ -74,8 +74,16 @@ class ESP32Client:
         """Receive JSON message from server"""
         try:
             data = self.socket.recv(1024).decode().strip()
-            if data:
-                return json.loads(data)
+            if not data:
+                return {}
+            # handle multiple JSON messages separated by newline
+            messages = data.strip().splitlines()
+            for msg in messages:
+                try:
+                    return json.loads(msg)
+                except json.JSONDecodeError:
+                    print(f"✗ JSON parse error: {msg}")
+                    continue
         except Exception as e:
             print(f"✗ Receive error: {e}")
         return {}
@@ -88,22 +96,32 @@ class ESP32Client:
         print("✓ Status monitoring started")
 
     def _monitor_loop(self):
-        """Background loop to receive status updates"""
+        buffer = ""
         while self.running:
             try:
-                message = self.receive_message()
-                if not message:
-                    continue
+                data = self.socket.recv(1024).decode()
+                if not data:
+                    break
+                buffer += data
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+                    try:
+                        message = json.loads(line)
+                    except json.JSONDecodeError:
+                        print(f"✗ JSON parse error: {line}")
+                        continue
 
-                if message.get('type') == 'status':
-                    with self.data_lock:
-                        self.latest_status = message
-                else:
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{timestamp}] Server: {message}")
-            except:
+                    if message.get('type') == 'status':
+                        with self.data_lock:
+                            self.latest_status = message
+                    else:
+                        print("Server:", message)
+
+            except Exception as e:
                 if self.running:
-                    print("✗ Lost connection to server")
+                    print("✗ Lost connection:", e)
                 break
 
     def control_led(self, led_number, state):
