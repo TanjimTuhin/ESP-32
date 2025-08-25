@@ -15,6 +15,8 @@ import json
 import threading
 import sys
 from datetime import datetime
+import time
+
 
 class ESP32Client:
     def __init__(self, host='192.168.10.113', port=8080, auth_password='IoTDevice2024'):
@@ -71,6 +73,24 @@ class ESP32Client:
             print(f"✗ Authentication error: {e}")
             return False
 
+    # Add this to keep connection alive during idle periods
+    def keep_alive_loop(self):
+        """Background thread to send periodic pings"""
+        while self.running and self.authenticated:
+            time.sleep(25)  # Wait 25 seconds
+            if self.running and self.authenticated:
+                try:
+                    self.ping()  # Send ping to reset heartbeat
+                    print("💗 Keep-alive ping sent")
+                except:
+                    break  # Stop if connection fails
+
+    def start_keep_alive(self):
+        """Start the keep-alive background thread"""
+        keep_alive_thread = threading.Thread(target=self.keep_alive_loop, daemon=True)
+        keep_alive_thread.start()
+        print("✓ Keep-alive started (ping every 25s)")
+    
     def send_message(self, message):
         """Send JSON message to server"""
         try:
@@ -203,7 +223,8 @@ def main():
         return
 
     client.start_monitoring()
-
+    client.start_keep_alive()
+    
     print("\nAvailable commands:")
     print("  led <id> on/off   -> Control individual LED (0-4)")
     print("  all on/off        -> Control all LEDs")
