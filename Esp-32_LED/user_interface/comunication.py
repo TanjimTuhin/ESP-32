@@ -49,14 +49,23 @@ class ESP32Client:
         try:
             auth_msg = {"command": "auth", "password": self.auth_password}
             self.send_message(auth_msg)
-
+            
+            # Add small delay and timeout
+            import time
+            time.sleep(0.5)  # Give server time to process
+            
             response = self.receive_message()
-            if response.get('status') == 'success':
+            if not response:  # Retry once if no response
+                print("No response, retrying...")
+                time.sleep(1)
+                response = self.receive_message()
+                
+            if response and response.get('status') == 'success':
                 self.authenticated = True
                 print("✓ Authentication successful")
                 return True
             else:
-                print(f"✗ Authentication failed: {response.get('message')}")
+                print(f"✗ Authentication failed: {response}")
                 return False
         except Exception as e:
             print(f"✗ Authentication error: {e}")
