@@ -1,130 +1,78 @@
 #!/usr/bin/env python3
 """
-ESP32 IoT Control System - Python Client
-==========================================
-
-Controls 5 LEDs and monitors 5 push buttons + potentiometer
-from an ESP32 IoT server via TCP JSON protocol.
-
-Usage:
-    python client.py
+ESP32 IoT Control System - GUI Client (with Toggle Sequence)
 """
 
-import socket
-import json
-import threading
-import sys
-from datetime import datetime
-import time
+import socket, json, threading, time, tkinter as tk
+from tkinter import ttk, messagebox
+
+CONFIG_FILE = "last_ip.txt"
 
 
 class ESP32Client:
-    def __init__(self, host='192.168.10.113', port=8080, auth_password='IoTDevice2024'):
+    def __init__(self, host, port=8080, auth_password="IoTDevice2024"):
         self.host = host
         self.port = port
         self.auth_password = auth_password
         self.socket = None
         self.authenticated = False
         self.running = False
-        self.data_lock = threading.Lock()
         self.latest_status = {}
+        self.lock = threading.Lock()
 
     def connect(self):
-        """Connect to ESP32 server"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.host, self.port))
             print(f"✓ Connected to ESP32 at {self.host}:{self.port}")
-
-            # Wait for auth challenge
-            response = self.receive_message()
-            if response:
-                print(f"Server: {response.get('message', 'Connected')}")
-
+            self.receive_message()  # read auth challenge
             return True
         except Exception as e:
-            print(f"✗ Connection failed: {e}")
+            messagebox.showerror("Connection Error", f"Could not connect: {e}")
             return False
 
     def authenticate(self):
-        """Authenticate with the server"""
         try:
-            auth_msg = {"command": "auth", "password": self.auth_password}
-            self.send_message(auth_msg)
-            
-            # Add small delay and timeout
-            import time
-            time.sleep(0.5)  # Give server time to process
-            
+            self.send_message({"command": "auth", "password": self.auth_password})
+            time.sleep(0.5)
             response = self.receive_message()
-            if not response:  # Retry once if no response
-                print("No response, retrying...")
-                time.sleep(1)
-                response = self.receive_message()
-                
-            if response and response.get('status') == 'success':
+            if response and response.get("status") == "success":
                 self.authenticated = True
                 print("✓ Authentication successful")
                 return True
             else:
-                print(f"✗ Authentication failed: {response}")
+                messagebox.showerror("Auth Failed", str(response))
                 return False
         except Exception as e:
-            print(f"✗ Authentication error: {e}")
+            messagebox.showerror("Auth Error", str(e))
             return False
 
-    # Add this to keep connection alive during idle periods
-    def keep_alive_loop(self):
-        """Background thread to send periodic pings"""
-        while self.running and self.authenticated:
-            time.sleep(25)  # Wait 25 seconds
-            if self.running and self.authenticated:
-                try:
-                    self.ping()  # Send ping to reset heartbeat
-                    print("💗 Keep-alive ping sent")
-                except:
-                    break  # Stop if connection fails
-
-    def start_keep_alive(self):
-        """Start the keep-alive background thread"""
-        keep_alive_thread = threading.Thread(target=self.keep_alive_loop, daemon=True)
-        keep_alive_thread.start()
-        print("✓ Keep-alive started (ping every 25s)")
-    
     def send_message(self, message):
-        """Send JSON message to server"""
         try:
-            json_str = json.dumps(message) + '\n'
-            self.socket.send(json_str.encode())
-        except Exception as e:
-            print(f"✗ Send error: {e}")
+            self.socket.send((json.dumps(message) + "\n").encode())
+        except:
+            pass
 
     def receive_message(self):
-        """Receive JSON message from server"""
         try:
-            data = self.socket.recv(1024).decode().strip()
+            data = self.socket.recv(1024).decode()
             if not data:
                 return {}
-            # handle multiple JSON messages separated by newline
-            messages = data.strip().splitlines()
-            for msg in messages:
+            for line in data.strip().splitlines():
                 try:
-                    return json.loads(msg)
-                except json.JSONDecodeError:
-                    print(f"✗ JSON parse error: {msg}")
+                    return json.loads(line)
+                except:
                     continue
-        except Exception as e:
-            print(f"✗ Receive error: {e}")
+        except:
+            return {}
         return {}
 
-    def start_monitoring(self):
-        """Start background thread to monitor status updates"""
+    def start_monitoring(self, update_callback):
         self.running = True
-        monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        monitor_thread.start()
-        print("✓ Status monitoring started")
+        threading.Thread(target=self._monitor_loop, args=(update_callback,), daemon=True).start()
+        threading.Thread(target=self._keep_alive, daemon=True).start()
 
-    def _monitor_loop(self):
+    def _monitor_loop(self, update_callback):
         buffer = ""
         while self.running:
             try:
@@ -137,139 +85,198 @@ class ESP32Client:
                     if not line.strip():
                         continue
                     try:
-                        message = json.loads(line)
-                    except json.JSONDecodeError:
-                        print(f"✗ JSON parse error: {line}")
+                        msg = json.loads(line)
+                        if msg.get("type") == "status":
+                            with self.lock:
+                                self.latest_status = msg
+                            update_callback(msg)
+                        else:
+                            print("Server:", msg)
+                    except:
                         continue
-
-                    if message.get('type') == 'status':
-                        with self.data_lock:
-                            self.latest_status = message
-                    else:
-                        print("Server:", message)
-
             except Exception as e:
-                if self.running:
-                    print("✗ Lost connection:", e)
+                print("✗ Lost connection:", e)
                 break
 
+    def _keep_alive(self):
+        while self.running and self.authenticated:
+            time.sleep(25)
+            self.ping()
+
     def control_led(self, led_number, state):
-        """Control individual LED"""
-        msg = {"command": "set_led", "led": led_number, "state": state}
-        self.send_message(msg)
+        self.send_message({"command": "set_led", "led": led_number, "state": state})
+        self.get_status()  # immediate refresh
 
     def control_all_leds(self, state):
-        """Control all LEDs"""
-        msg = {"command": "set_all_leds", "state": state}
-        self.send_message(msg)
+        self.send_message({"command": "set_all_leds", "state": state})
+        self.get_status()
+
+    def toggle_led_sequence(self):
+        """Turn LEDs on one by one, wait, then off one by one"""
+        if not self.authenticated:
+            return
+        # Turn ON one by one
+        for i in range(1, 6):
+            self.control_led(i, True)
+            time.sleep(0.2)
+
+        time.sleep(1.0)  # hold all ON
+
+        # Turn OFF one by one
+        for i in range(1, 6):
+            self.control_led(i, False)
+            time.sleep(0.2)
 
     def get_status(self):
-        """Request current status"""
         self.send_message({"command": "get_status"})
 
     def ping(self):
-        """Send ping to test connection"""
         self.send_message({"command": "ping"})
-
-    def print_status(self):
-        """Print current system status"""
-        with self.data_lock:
-            if not self.latest_status:
-                print("No status data available")
-                return
-
-            status = self.latest_status
-            timestamp = datetime.now().strftime("%H:%M:%S")
-
-            print(f"\n{'='*50}")
-            print(f"ESP32 System Status - {timestamp}")
-            print(f"{'='*50}")
-
-            # LEDs
-            print("LEDs:")
-            for led in status.get('leds', []):
-                state = "ON " if led['state'] else "OFF"
-                print(f"  LED {led['id']}: {state}")
-
-            # Buttons
-            print("\nButtons:")
-            for btn in status.get('buttons', []):
-                state = "PRESSED " if btn['pressed'] else "released"
-                print(f"  Button {btn['id']}: {state}")
-
-            # Potentiometer
-            pot = status.get('potentiometer', {})
-            if pot:
-                print("\nPotentiometer:")
-                print(f"  Raw: {pot.get('raw', 0)}")
-                print(f"  Voltage: {pot.get('voltage', 0):.2f} V")
-                print(f"  Percent: {pot.get('percent', 0)} %")
-
-            print("="*50 + "\n")
 
     def close(self):
         self.running = False
         if self.socket:
             self.socket.close()
-        print("✓ Disconnected")
+
+
+# ---------------- GUI ---------------- #
+class ESP32GUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("ESP32 IoT Control System")
+        self.client = None
+        self.connected = False
+
+        # Connection panel
+        conn_frame = ttk.Frame(root)
+        conn_frame.pack(padx=10, pady=5, fill="x")
+
+        ttk.Label(conn_frame, text="IP:").pack(side="left")
+        self.ip_entry = ttk.Entry(conn_frame, width=15)
+        self.ip_entry.pack(side="left", padx=5)
+        self.ip_entry.insert(0, self.load_last_ip())
+
+        ttk.Label(conn_frame, text="Port:").pack(side="left")
+        self.port_entry = ttk.Entry(conn_frame, width=6)
+        self.port_entry.pack(side="left", padx=5)
+        self.port_entry.insert(0, "8080")
+
+        ttk.Label(conn_frame, text="Password:").pack(side="left")
+        self.pass_entry = ttk.Entry(conn_frame, width=15, show="*")
+        self.pass_entry.pack(side="left", padx=5)
+        self.pass_entry.insert(0, "IoTDevice2024")
+
+        self.connect_btn = ttk.Button(conn_frame, text="Connect", command=self.connect_to_esp)
+        self.connect_btn.pack(side="left", padx=5)
+
+        self.status_label = ttk.Label(conn_frame, text="Disconnected", foreground="red")
+        self.status_label.pack(side="left", padx=10)
+
+        # LED control
+        led_frame = ttk.LabelFrame(root, text="LED Control")
+        led_frame.pack(padx=10, pady=5, fill="x")
+
+        self.led_buttons = []
+        for i in range(1, 6):
+            var = tk.BooleanVar()
+            chk = tk.Checkbutton(
+                led_frame, text=f"LED {i}", variable=var,
+                command=lambda i=i, v=var: self.client.control_led(i, v.get()) if self.client else None
+            )
+            chk.pack(side="left", padx=5, pady=5)
+            self.led_buttons.append(var)
+
+        ttk.Button(led_frame, text="All ON", command=lambda: self.client.control_all_leds(True)).pack(side="left", padx=5)
+        ttk.Button(led_frame, text="All OFF", command=lambda: self.client.control_all_leds(False)).pack(side="left", padx=5)
+        ttk.Button(
+            led_frame, text="Toggle Sequence",
+            command=lambda: threading.Thread(target=self.client.toggle_led_sequence, daemon=True).start()
+        ).pack(side="left", padx=5)
+
+        # Status area
+        status_frame = ttk.LabelFrame(root, text="Status")
+        status_frame.pack(padx=10, pady=5, fill="both", expand=True)
+
+        self.status_text = tk.Text(status_frame, height=12, state="disabled")
+        self.status_text.pack(fill="both", expand=True)
+
+    def connect_to_esp(self):
+        if self.connected:  # Disconnect mode
+            self.client.close()
+            self.client = None
+            self.connected = False
+            self.status_label.config(text="Disconnected", foreground="red")
+            self.connect_btn.config(text="Connect")
+            return
+
+        ip = self.ip_entry.get().strip()
+        port = int(self.port_entry.get().strip())
+        password = self.pass_entry.get().strip()
+
+        if not ip:
+            ip = self.load_last_ip()
+            self.ip_entry.insert(0, ip)
+
+        self.save_last_ip(ip)
+        self.client = ESP32Client(ip, port, password)
+
+        if not self.client.connect():
+            self.status_label.config(text="Disconnected", foreground="red")
+            return
+        if not self.client.authenticate():
+            self.status_label.config(text="Disconnected", foreground="red")
+            return
+
+        self.client.start_monitoring(self.update_status)
+        self.client.get_status()
+        self.status_label.config(text="Connected", foreground="green")
+        self.connect_btn.config(text="Disconnect")
+        self.connected = True
+
+    def update_status(self, status):
+        self.status_text.config(state="normal")
+        self.status_text.delete("1.0", tk.END)
+
+        self.status_text.insert(tk.END, f"Timestamp: {status.get('timestamp')}\n\n")
+
+        self.status_text.insert(tk.END, "LEDs:\n")
+        for led in status.get("leds", []):
+            self.status_text.insert(tk.END, f"  LED {led['id']}: {'ON' if led['state'] else 'OFF'}\n")
+            self.led_buttons[led['id'] - 1].set(led['state'])
+
+        self.status_text.insert(tk.END, "\nButtons:\n")
+        for btn in status.get("buttons", []):
+            self.status_text.insert(tk.END, f"  Button {btn['id']}: {'PRESSED' if btn['pressed'] else 'released'}\n")
+
+        pot = status.get("potentiometer", {})
+        self.status_text.insert(tk.END, "\nPotentiometer:\n")
+        self.status_text.insert(tk.END, f"  Raw: {pot.get('raw', 0)}\n")
+        self.status_text.insert(tk.END, f"  Voltage: {pot.get('voltage', 0):.2f} V\n")
+        self.status_text.insert(tk.END, f"  Percent: {pot.get('percent', 0)} %\n")
+
+        self.status_text.config(state="disabled")
+
+    def save_last_ip(self, ip):
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                f.write(ip)
+        except:
+            pass
+
+    def load_last_ip(self):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return f.read().strip()
+        except:
+            return ""
 
 
 def main():
-    client = ESP32Client()
-
-    if not client.connect():
-        return
-    if not client.authenticate():
-        return
-
-    client.start_monitoring()
-    client.start_keep_alive()
-    
-    print("\nAvailable commands:")
-    print("  led <id> on/off   -> Control individual LED (0-4)")
-    print("  all on/off        -> Control all LEDs")
-    print("  status            -> Show latest system status")
-    print("  ping              -> Send ping to server")
-    print("  exit              -> Quit program\n")
-
-    try:
-        while True:
-            cmd = input(">> ").strip().lower()
-            if not cmd:
-                continue
-
-            if cmd.startswith("led"):
-                parts = cmd.split()
-                if len(parts) == 3 and parts[1].isdigit():
-                    led_id = int(parts[1])
-                    state = parts[2] == "on"
-                    client.control_led(led_id, state)
-                else:
-                    print("Usage: led <id> on/off")
-
-            elif cmd.startswith("all"):
-                parts = cmd.split()
-                if len(parts) == 2:
-                    state = parts[1] == "on"
-                    client.control_all_leds(state)
-                else:
-                    print("Usage: all on/off")
-
-            elif cmd == "status":
-                client.print_status()
-
-            elif cmd == "ping":
-                client.ping()
-
-            elif cmd == "exit":
-                break
-
-            else:
-                print("Unknown command")
-    except KeyboardInterrupt:
-        print("\nExiting...")
-
-    client.close()
+    root = tk.Tk()
+    gui = ESP32GUI(root)
+    root.mainloop()
+    if gui.client:
+        gui.client.close()
 
 
 if __name__ == "__main__":

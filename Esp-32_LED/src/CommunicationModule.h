@@ -17,15 +17,15 @@ struct ClientInfo {
 class CommunicationModule {
 private:
     // Network Configuration
-    const char* ssid = "SECL RnD LAB";
-    const char* password = "SECL@2024";
+    const char* ssid = "Spectrum Eng.";
+    const char* password = "Secl@2021";
     const char* auth_password = "IoTDevice2024";
     
     // Server Configuration
     WiFiServer server;
     static const int SERVER_PORT = 8080;
     static const int MAX_CLIENTS = 5;
-    static const unsigned long HEARTBEAT_TIMEOUT = 30000; // 30 seconds
+    static const unsigned long HEARTBEAT_TIMEOUT = 300000; // 300 seconds
     static const unsigned long UPDATE_INTERVAL = 1000;    // 1 second
     
     // Client Management
