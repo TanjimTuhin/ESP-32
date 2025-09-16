@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """
-ESP32 IoT Control System - Enhanced GUI Client with Visual Servo Control
+ESP32 IoT Control System - Complete GUI Client
+- Potentiometer visualization with circular gauge
+- Working servo control via slider/buttons
+- LED control and button status display
+- Real-time status updates
 """
 
-import socket, json, threading, time, tkinter as tk
+import socket
+import json
+import threading
+import time
+import tkinter as tk
 from tkinter import ttk, messagebox
 import math
+import os
 
 CONFIG_FILE = "last_ip.txt"
 
@@ -24,6 +33,7 @@ class ESP32Client:
     def connect(self):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(10)
             self.socket.connect((self.host, self.port))
             print(f"Connected to ESP32 at {self.host}:{self.port}")
             self.receive_message()  # read auth challenge
@@ -50,21 +60,24 @@ class ESP32Client:
 
     def send_message(self, message):
         try:
-            self.socket.send((json.dumps(message) + "\n").encode())
-        except:
-            pass
+            if self.socket:
+                self.socket.send((json.dumps(message) + "\n").encode())
+        except Exception as e:
+            print(f"Send error: {e}")
 
     def receive_message(self):
         try:
-            data = self.socket.recv(1024).decode()
-            if not data:
-                return {}
-            for line in data.strip().splitlines():
-                try:
-                    return json.loads(line)
-                except:
-                    continue
-        except:
+            if self.socket:
+                data = self.socket.recv(1024).decode()
+                if not data:
+                    return {}
+                for line in data.strip().splitlines():
+                    try:
+                        return json.loads(line)
+                    except:
+                        continue
+        except Exception as e:
+            print(f"Receive error: {e}")
             return {}
         return {}
 
@@ -77,6 +90,8 @@ class ESP32Client:
         buffer = ""
         while self.running:
             try:
+                if not self.socket:
+                    break
                 data = self.socket.recv(1024).decode()
                 if not data:
                     break
@@ -93,7 +108,8 @@ class ESP32Client:
                             update_callback(msg)
                         else:
                             print("Server:", msg)
-                    except:
+                    except Exception as e:
+                        print(f"JSON parse error: {e}")
                         continue
             except Exception as e:
                 print("Lost connection:", e)
@@ -106,19 +122,24 @@ class ESP32Client:
 
     def control_led(self, led_number, state):
         self.send_message({"command": "set_led", "led": led_number, "state": state})
+        time.sleep(0.1)
         self.get_status()
 
     def control_all_leds(self, state):
         self.send_message({"command": "set_all_leds", "state": state})
+        time.sleep(0.1)
         self.get_status()
 
     def control_servo(self, angle):
         self.send_message({"command": "set_servo", "angle": angle})
+        time.sleep(0.1)
         self.get_status()
 
     def toggle_led_sequence(self):
         if not self.authenticated:
             return
+        # Note: The server-side will handle this when buttons are pressed
+        # This is just for manual triggering from GUI
         for i in range(1, 6):
             self.control_led(i, True)
             time.sleep(0.2)
@@ -136,156 +157,152 @@ class ESP32Client:
     def close(self):
         self.running = False
         if self.socket:
-            self.socket.close()
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
 
 
-class ServoGaugeWidget(tk.Canvas):
-    """Custom widget for visual servo control with circular gauge"""
+class PotentiometerGaugeWidget(tk.Canvas):
+    """Custom widget for potentiometer visualization with circular gauge"""
     
-    def __init__(self, parent, width=200, height=200, callback=None):
+    def __init__(self, parent, width=200, height=200):
         super().__init__(parent, width=width, height=height, bg='white', highlightthickness=1)
         self.width = width
         self.height = height
         self.center_x = width // 2
         self.center_y = height // 2
         self.radius = min(width, height) // 2 - 20
-        self.angle = 90  # Current angle (0-180)
-        self.callback = callback
-        self.dragging = False
-        
-        self.bind("<Button-1>", self.on_click)
-        self.bind("<B1-Motion>", self.on_drag)
-        self.bind("<ButtonRelease-1>", self.on_release)
+        self.value = 50  # Current percentage (0-100)
         
         self.draw_gauge()
     
     def draw_gauge(self):
         self.delete("all")
         
-        # Draw arc background (semicircle from 0 to 180 degrees)
-        arc_start = 0
-        arc_extent = 180
-        
-        # Outer arc
-        self.create_arc(
+        # Draw outer circle
+        self.create_oval(
             self.center_x - self.radius, self.center_y - self.radius,
             self.center_x + self.radius, self.center_y + self.radius,
-            start=arc_start, extent=arc_extent, outline='black', width=3,
-            style='arc'
+            outline='black', width=3
         )
         
-        # Inner arc for filled area
-        self.create_arc(
-            self.center_x - self.radius + 10, self.center_y - self.radius + 10,
-            self.center_x + self.radius - 10, self.center_y + self.radius - 10,
-            start=arc_start, extent=arc_extent, outline='lightgray', width=1,
-            style='arc'
+        # Draw inner circle (background)
+        inner_radius = self.radius - 15
+        self.create_oval(
+            self.center_x - inner_radius, self.center_y - inner_radius,
+            self.center_x + inner_radius, self.center_y + inner_radius,
+            outline='lightgray', width=1
         )
         
-        # Draw angle markings
-        for angle in [0, 30, 45, 60, 90, 120, 135, 150, 180]:
-            canvas_angle = math.radians(180 - angle)
+        # Draw percentage markings
+        for percent in [0, 25, 50, 75, 100]:
+            angle = math.radians(270 + (percent / 100.0) * 360)  # Start from top, go clockwise
             
-            outer_x = self.center_x + (self.radius - 5) * math.cos(canvas_angle)
-            outer_y = self.center_y - (self.radius - 5) * math.sin(canvas_angle)
-            inner_x = self.center_x + (self.radius - 15) * math.cos(canvas_angle)
-            inner_y = self.center_y - (self.radius - 15) * math.sin(canvas_angle)
+            outer_x = self.center_x + (self.radius - 5) * math.cos(angle)
+            outer_y = self.center_y + (self.radius - 5) * math.sin(angle)
+            inner_x = self.center_x + (self.radius - 15) * math.cos(angle)
+            inner_y = self.center_y + (self.radius - 15) * math.sin(angle)
             
             self.create_line(outer_x, outer_y, inner_x, inner_y, fill='black', width=2)
             
-            label_x = self.center_x + (self.radius - 25) * math.cos(canvas_angle)
-            label_y = self.center_y - (self.radius - 25) * math.sin(canvas_angle)
-            self.create_text(label_x, label_y, text=str(angle), font=('Arial', 8))
+            label_x = self.center_x + (self.radius - 25) * math.cos(angle)
+            label_y = self.center_y + (self.radius - 25) * math.sin(angle)
+            self.create_text(label_x, label_y, text=f"{percent}%", font=('Arial', 8))
         
-        # Draw pointer
-        self.draw_pointer()
+        # Draw value indicator
+        self.draw_indicator()
         
         # Draw center circle
         self.create_oval(
             self.center_x - 5, self.center_y - 5,
             self.center_x + 5, self.center_y + 5,
-            fill='black', outline='black'
+            fill='darkblue', outline='darkblue'
         )
         
-        # Draw current angle text
+        # Draw current value text
         self.create_text(
             self.center_x, self.center_y + 30,
-            text=f"{self.angle}°", font=('Arial', 14, 'bold'),
-            tags='angle_text'
+            text=f"{self.value}%", font=('Arial', 14, 'bold'),
+            tags='value_text'
         )
     
-    def draw_pointer(self):
-        canvas_angle = math.radians(180 - self.angle)
+    def draw_indicator(self):
+        # Calculate angle based on percentage (0% = top, 100% = full circle)
+        angle = math.radians(270 + (self.value / 100.0) * 360)
         
-        pointer_x = self.center_x + (self.radius - 20) * math.cos(canvas_angle)
-        pointer_y = self.center_y - (self.radius - 20) * math.sin(canvas_angle)
+        indicator_x = self.center_x + (self.radius - 20) * math.cos(angle)
+        indicator_y = self.center_y + (self.radius - 20) * math.sin(angle)
         
-        self.delete('pointer')
+        self.delete('indicator')
         
+        # Draw indicator line
         self.create_line(
-            self.center_x, self.center_y, pointer_x, pointer_y,
-            fill='red', width=3, tags='pointer'
+            self.center_x, self.center_y, indicator_x, indicator_y,
+            fill='red', width=4, tags='indicator'
         )
         
+        # Draw indicator dot
         self.create_oval(
-            pointer_x - 3, pointer_y - 3, pointer_x + 3, pointer_y + 3,
-            fill='red', outline='red', tags='pointer'
+            indicator_x - 4, indicator_y - 4, indicator_x + 4, indicator_y + 4,
+            fill='red', outline='darkred', tags='indicator'
         )
     
-    def on_click(self, event):
-        self.dragging = True
-        self.update_angle_from_mouse(event.x, event.y)
-    
-    def on_drag(self, event):
-        if self.dragging:
-            self.update_angle_from_mouse(event.x, event.y)
-    
-    def on_release(self, event):
-        self.dragging = False
-    
-    def update_angle_from_mouse(self, x, y):
-        dx = x - self.center_x
-        dy = self.center_y - y
+    def set_value(self, value):
+        """Set percentage value and redraw indicator"""
+        self.value = max(0, min(100, value))
+        self.draw_indicator()
         
-        angle_rad = math.atan2(dy, dx)
-        angle_deg = math.degrees(angle_rad)
-        
-        if angle_deg < 0:
-            angle_deg = 0
-        elif angle_deg > 180:
-            angle_deg = 180
-        
-        self.set_angle(int(angle_deg))
-        
-        if self.callback:
-            self.callback(self.angle)
-    
-    def set_angle(self, angle):
-        """Set angle and redraw pointer"""
-        self.angle = max(0, min(180, angle))
-        self.draw_pointer()
-        
-        self.delete('angle_text')
+        # Update text
+        self.delete('value_text')
         self.create_text(
             self.center_x, self.center_y + 30,
-            text=f"{self.angle}°", font=('Arial', 14, 'bold'),
-            tags='angle_text'
+            text=f"{self.value}%", font=('Arial', 14, 'bold'),
+            tags='value_text'
         )
 
 
 class ESP32GUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("ESP32 IoT Control System - Enhanced Servo Control")
-        self.root.geometry("650x760")
+        self.root.title("ESP32 IoT Control System - Potentiometer Controlled Servo")
+        self.root.geometry("700x800")
+        self.root.resizable(False, False)
 
         self.client = None
         self.connected = False
         self.current_servo_angle = 90
-        self.updating_controls = False  # Flag to prevent circular updates
+        self.updating_servo_controls = False
 
-        # Connection panel
-        conn_frame = ttk.Frame(root)
+        # Create all GUI panels
+        self.create_connection_panel()
+        self.create_led_control_panel()
+        self.create_potentiometer_panel()
+        self.create_servo_control_panel()
+        self.create_button_panel()
+        self.create_status_panel()
+
+    def load_last_ip(self):
+        """Load the last used IP address from config file"""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    return f.read().strip()
+        except:
+            pass
+        return "192.168.1.100"  # Default IP
+
+    def save_last_ip(self, ip):
+        """Save the IP address to config file"""
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                f.write(ip)
+        except:
+            pass
+
+    def create_connection_panel(self):
+        conn_frame = ttk.Frame(self.root)
         conn_frame.pack(padx=10, pady=5, fill="x")
 
         ttk.Label(conn_frame, text="IP:").pack(side="left")
@@ -303,320 +320,353 @@ class ESP32GUI:
         self.pass_entry.pack(side="left", padx=5)
         self.pass_entry.insert(0, "IoTDevice2024")
 
-        self.connect_btn = ttk.Button(conn_frame, text="Connect", command=self.connect_to_esp)
+        self.connect_btn = ttk.Button(conn_frame, text="Connect", command=self.connect_to_esp32)
         self.connect_btn.pack(side="left", padx=5)
 
-        self.status_label = ttk.Label(conn_frame, text="Disconnected", foreground="red")
-        self.status_label.pack(side="left", padx=10)
+        self.disconnect_btn = ttk.Button(conn_frame, text="Disconnect", command=self.disconnect_from_esp32, state="disabled")
+        self.disconnect_btn.pack(side="left", padx=5)
 
-        # LED control
-        led_frame = ttk.LabelFrame(root, text="LED Control")
+        self.status_label = ttk.Label(conn_frame, text="Disconnected", foreground="red")
+        self.status_label.pack(side="right")
+
+    def create_led_control_panel(self):
+        led_frame = ttk.LabelFrame(self.root, text="LED Control")
         led_frame.pack(padx=10, pady=5, fill="x")
 
+        # Individual LED controls
+        self.led_vars = []
         self.led_buttons = []
-        for i in range(1, 6):
+        
+        individual_frame = ttk.Frame(led_frame)
+        individual_frame.pack(pady=5)
+        
+        for i in range(5):
             var = tk.BooleanVar()
-            chk = tk.Checkbutton(
-                led_frame, text=f"LED {i}", variable=var,
-                command=lambda i=i, v=var: self.client.control_led(i, v.get()) if self.client else None
+            self.led_vars.append(var)
+            
+            btn = ttk.Checkbutton(
+                individual_frame, 
+                text=f"LED {i+1}", 
+                variable=var,
+                command=lambda idx=i: self.toggle_led(idx+1)
             )
-            chk.pack(side="left", padx=5, pady=5)
-            self.led_buttons.append(var)
+            btn.pack(side="left", padx=10)
+            self.led_buttons.append(btn)
 
-        ttk.Button(led_frame, text="All ON", command=lambda: self.client.control_all_leds(True) if self.client else None).pack(side="left", padx=5)
-        ttk.Button(led_frame, text="All OFF", command=lambda: self.client.control_all_leds(False) if self.client else None).pack(side="left", padx=5)
-        ttk.Button(
-            led_frame, text="Toggle Sequence",
-            command=lambda: threading.Thread(target=self.client.toggle_led_sequence, daemon=True).start() if self.client else None
-        ).pack(side="left", padx=5)
+        # All LEDs control
+        all_frame = ttk.Frame(led_frame)
+        all_frame.pack(pady=5)
 
-        # Enhanced Servo control
-        servo_frame = ttk.LabelFrame(root, text="Servo Control (0-180°)")
+        ttk.Button(all_frame, text="All ON", command=lambda: self.control_all_leds(True)).pack(side="left", padx=5)
+        ttk.Button(all_frame, text="All OFF", command=lambda: self.control_all_leds(False)).pack(side="left", padx=5)
+        ttk.Button(all_frame, text="LED Sequence", command=self.trigger_led_sequence).pack(side="left", padx=5)
+
+    def create_potentiometer_panel(self):
+        pot_frame = ttk.LabelFrame(self.root, text="Potentiometer Status (Auto-Controls Servo)")
+        pot_frame.pack(padx=10, pady=5, fill="x")
+
+        # Create gauge widget
+        gauge_frame = ttk.Frame(pot_frame)
+        gauge_frame.pack(pady=10)
+
+        self.pot_gauge = PotentiometerGaugeWidget(gauge_frame, width=220, height=220)
+        self.pot_gauge.pack(side="left", padx=10)
+
+        # Potentiometer info
+        info_frame = ttk.Frame(gauge_frame)
+        info_frame.pack(side="left", padx=20, fill="both", expand=True)
+
+        ttk.Label(info_frame, text="Potentiometer Status:", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
+        
+        self.pot_raw_label = ttk.Label(info_frame, text="Raw Value: --")
+        self.pot_raw_label.pack(anchor="w")
+        
+        self.pot_voltage_label = ttk.Label(info_frame, text="Voltage: --V")
+        self.pot_voltage_label.pack(anchor="w")
+        
+        self.pot_percent_label = ttk.Label(info_frame, text="Percentage: --%")
+        self.pot_percent_label.pack(anchor="w")
+
+        ttk.Separator(info_frame, orient="horizontal").pack(fill="x", pady=10)
+        
+        ttk.Label(info_frame, text="Servo Status:", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
+        
+        self.servo_angle_label = ttk.Label(info_frame, text="Current Angle: --°")
+        self.servo_angle_label.pack(anchor="w")
+
+        ttk.Label(info_frame, text="Note: Potentiometer automatically\ncontrols servo position", 
+                 font=('Arial', 9), foreground="blue").pack(anchor="w", pady=10)
+
+    def create_servo_control_panel(self):
+        servo_frame = ttk.LabelFrame(self.root, text="Manual Servo Control (Temporary Override)")
         servo_frame.pack(padx=10, pady=5, fill="x")
-        
-        servo_container = ttk.Frame(servo_frame)
-        servo_container.pack(fill="x", padx=5, pady=5)
-        
-        # Left side - Visual gauge
-        gauge_frame = ttk.Frame(servo_container)
-        gauge_frame.pack(side="left", padx=10)
-        
-        ttk.Label(gauge_frame, text="Visual Control", font=('Arial', 10, 'bold')).pack()
-        self.servo_gauge = ServoGaugeWidget(gauge_frame, 200, 200, self.on_gauge_change)
-        self.servo_gauge.pack(pady=5)
-        
-        # Right side - Controls
-        controls_frame = ttk.Frame(servo_container)
-        controls_frame.pack(side="left", fill="x", expand=True, padx=20)
-        
-        # Input controls row
-        input_frame = ttk.Frame(controls_frame)
-        input_frame.pack(pady=10)
-        
-        ttk.Label(input_frame, text="Angle Control:", font=('Arial', 10, 'bold')).pack(anchor="w")
-        
-        angle_control_frame = ttk.Frame(input_frame)
-        angle_control_frame.pack(pady=5)
-        
-        # Decrease button
-        self.decrease_btn = ttk.Button(angle_control_frame, text="−", width=3, 
-                                     command=self.decrease_angle)
-        self.decrease_btn.pack(side="left", padx=2)
-        
-        # Angle entry
-        self.servo_entry = ttk.Entry(angle_control_frame, width=5, justify="center")
-        self.servo_entry.insert(0, "90")
-        self.servo_entry.pack(side="left", padx=2)
-        self.servo_entry.bind("<Return>", self.on_entry_change)
-        self.servo_entry.bind("<FocusOut>", self.on_entry_change)
-        
-        # Increase button
-        self.increase_btn = ttk.Button(angle_control_frame, text="+", width=3,
-                                     command=self.increase_angle)
-        self.increase_btn.pack(side="left", padx=2)
-        
-        # Set button
-        ttk.Button(angle_control_frame, text="Set", command=self.set_servo_angle).pack(side="left", padx=5)
-        
-        # Preset angles
-        preset_frame = ttk.Frame(controls_frame)
-        preset_frame.pack(pady=10)
-        
-        ttk.Label(preset_frame, text="Preset Angles:", font=('Arial', 10, 'bold')).pack(anchor="w")
-        
-        preset_buttons_frame = ttk.Frame(preset_frame)
-        preset_buttons_frame.pack(pady=5)
-        
-        preset_angles = [0, 30, 45, 90, 120, 150, 180]
-        for angle in preset_angles:
-            btn = ttk.Button(preset_buttons_frame, text=f"{angle}°", width=5,
-                           command=lambda a=angle: self.set_preset_angle(a))
-            btn.pack(side="left", padx=1)
-        
-        # Slider for alternative control
-        slider_frame = ttk.Frame(controls_frame)
-        slider_frame.pack(fill="x", pady=10)
-        
-        ttk.Label(slider_frame, text="Slider Control:", font=('Arial', 10, 'bold')).pack(anchor="w")
-        self.servo_slider = ttk.Scale(slider_frame, from_=0, to=180, orient="horizontal", 
-                                    command=self.on_slider_change)
-        self.servo_slider.set(90)
-        self.servo_slider.pack(fill="x", pady=5)
 
-        # Status area
-        status_frame = ttk.LabelFrame(root, text="System Status")
+        control_frame = ttk.Frame(servo_frame)
+        control_frame.pack(pady=10)
+
+        # Servo slider
+        ttk.Label(control_frame, text="Angle:").pack(side="left")
+        
+        self.servo_var = tk.IntVar(value=90)
+        self.servo_scale = ttk.Scale(
+            control_frame, 
+            from_=0, to=180, 
+            variable=self.servo_var, 
+            orient="horizontal", 
+            length=300,
+            command=self.on_servo_scale_change
+        )
+        self.servo_scale.pack(side="left", padx=10)
+
+        self.servo_value_label = ttk.Label(control_frame, text="90°")
+        self.servo_value_label.pack(side="left", padx=5)
+
+        # Quick angle buttons
+        button_frame = ttk.Frame(servo_frame)
+        button_frame.pack(pady=5)
+
+        angles = [0, 45, 90, 135, 180]
+        for angle in angles:
+            ttk.Button(
+                button_frame, 
+                text=f"{angle}°", 
+                command=lambda a=angle: self.set_servo_angle(a)
+            ).pack(side="left", padx=5)
+
+        # Warning label
+        ttk.Label(servo_frame, text="Note: Manual control is temporary - potentiometer will take over again", 
+                 font=('Arial', 9), foreground="orange").pack(pady=5)
+
+    def create_button_panel(self):
+        btn_frame = ttk.LabelFrame(self.root, text="Hardware Button Status")
+        btn_frame.pack(padx=10, pady=5, fill="x")
+
+        self.button_labels = []
+        button_grid = ttk.Frame(btn_frame)
+        button_grid.pack(pady=10)
+
+        for i in range(5):
+            label = ttk.Label(button_grid, text=f"Button {i+1}: Released", 
+                            relief="raised", padding=5)
+            label.grid(row=0, column=i, padx=5, pady=5)
+            self.button_labels.append(label)
+
+        ttk.Label(btn_frame, text="Press hardware buttons to trigger LED sequence", 
+                 font=('Arial', 9), foreground="blue").pack(pady=5)
+
+    def create_status_panel(self):
+        status_frame = ttk.LabelFrame(self.root, text="System Status")
         status_frame.pack(padx=10, pady=5, fill="both", expand=True)
 
-        self.status_text = tk.Text(status_frame, height=8, state="disabled")
-        scrollbar = ttk.Scrollbar(status_frame, orient="vertical", command=self.status_text.yview)
+        # Create text widget with scrollbar
+        text_frame = ttk.Frame(status_frame)
+        text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.status_text = tk.Text(text_frame, height=8, font=('Courier', 9))
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.status_text.yview)
         self.status_text.configure(yscrollcommand=scrollbar.set)
+
         self.status_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-    def on_gauge_change(self, angle):
-        """Called when gauge angle changes"""
-        if self.updating_controls:
-            return
-        self.current_servo_angle = angle
-        self.update_other_controls_from_gauge(angle)
-        if self.client and self.connected:
-            self.client.control_servo(angle)
+        # Control buttons
+        control_frame = ttk.Frame(status_frame)
+        control_frame.pack(fill="x", padx=5, pady=5)
 
-    def on_slider_change(self, value):
-        """Called when slider changes"""
-        if self.updating_controls:
-            return
-        angle = int(float(value))
-        self.current_servo_angle = angle
-        self.update_other_controls_from_slider(angle)
+        ttk.Button(control_frame, text="Get Status", command=self.request_status).pack(side="left", padx=5)
+        ttk.Button(control_frame, text="Clear Log", command=self.clear_status).pack(side="left", padx=5)
+        ttk.Button(control_frame, text="Ping", command=self.ping_server).pack(side="left", padx=5)
 
-    def on_entry_change(self, event=None):
-        """Called when entry box changes"""
-        if self.updating_controls:
-            return
-        try:
-            angle = int(self.servo_entry.get())
-            angle = max(0, min(180, angle))
-            self.current_servo_angle = angle
-            self.update_other_controls_from_entry(angle)
-        except ValueError:
-            self.servo_entry.delete(0, tk.END)
-            self.servo_entry.insert(0, str(self.current_servo_angle))
-
-    def decrease_angle(self):
-        """Decrease angle by 1 degree"""
-        new_angle = max(0, self.current_servo_angle - 1)
-        self.current_servo_angle = new_angle
-        self.update_all_angle_displays(new_angle)
-        if self.client and self.connected:
-            self.client.control_servo(new_angle)
-
-    def increase_angle(self):
-        """Increase angle by 1 degree"""
-        new_angle = min(180, self.current_servo_angle + 1)
-        self.current_servo_angle = new_angle
-        self.update_all_angle_displays(new_angle)
-        if self.client and self.connected:
-            self.client.control_servo(new_angle)
-
-    def set_preset_angle(self, angle):
-        """Set servo to preset angle"""
-        self.current_servo_angle = angle
-        self.update_all_angle_displays(angle)
-        if self.client and self.connected:
-            self.client.control_servo(angle)
-
-    def set_servo_angle(self):
-        """Set servo angle from entry box"""
-        try:
-            angle = int(self.servo_entry.get())
-            if angle < 0 or angle > 180:
-                messagebox.showerror("Invalid Angle", "Angle must be between 0 and 180 degrees")
-                return
-            self.current_servo_angle = angle
-            self.update_all_angle_displays(angle)
-            if self.client and self.connected:
-                self.client.control_servo(angle)
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter a valid number")
-
-    def update_all_angle_displays(self, angle):
-        """Update all angle display elements"""
-        self.updating_controls = True
-        try:
-            self.servo_gauge.set_angle(angle)
-            self.servo_entry.delete(0, tk.END)
-            self.servo_entry.insert(0, str(angle))
-            self.servo_slider.set(angle)
-        finally:
-            self.updating_controls = False
-
-    def update_other_controls_from_gauge(self, angle):
-        """Update all controls except gauge"""
-        self.updating_controls = True
-        try:
-            self.servo_entry.delete(0, tk.END)
-            self.servo_entry.insert(0, str(angle))
-            self.servo_slider.set(angle)
-        finally:
-            self.updating_controls = False
-
-    def update_other_controls_from_slider(self, angle):
-        """Update all controls except slider"""
-        self.updating_controls = True
-        try:
-            self.servo_gauge.set_angle(angle)
-            self.servo_entry.delete(0, tk.END)
-            self.servo_entry.insert(0, str(angle))
-        finally:
-            self.updating_controls = False
-
-    def update_other_controls_from_entry(self, angle):
-        """Update all controls except entry"""
-        self.updating_controls = True
-        try:
-            self.servo_gauge.set_angle(angle)
-            self.servo_slider.set(angle)
-        finally:
-            self.updating_controls = False
-
-    def connect_to_esp(self):
+    def connect_to_esp32(self):
         if self.connected:
-            self.client.close()
-            self.client = None
-            self.connected = False
-            self.status_label.config(text="Disconnected", foreground="red")
-            self.connect_btn.config(text="Connect")
             return
 
-        ip = self.ip_entry.get().strip()
+        host = self.ip_entry.get().strip()
         port = int(self.port_entry.get().strip())
         password = self.pass_entry.get().strip()
 
-        if not ip:
-            ip = self.load_last_ip()
-            self.ip_entry.insert(0, ip)
-
-        self.save_last_ip(ip)
-        self.client = ESP32Client(ip, port, password)
-
-        if not self.client.connect():
-            self.status_label.config(text="Disconnected", foreground="red")
-            return
-        if not self.client.authenticate():
-            self.status_label.config(text="Disconnected", foreground="red")
+        if not host or not password:
+            messagebox.showerror("Error", "Please enter IP and password")
             return
 
-        self.client.start_monitoring(self.update_status)
-        self.client.get_status()
-        self.status_label.config(text="Connected", foreground="green")
-        self.connect_btn.config(text="Disconnect")
-        self.connected = True
-
-    def update_status(self, status):
-        self.status_text.config(state="normal")
-        self.status_text.delete("1.0", tk.END)
-
-        self.status_text.insert(tk.END, f"Timestamp: {status.get('timestamp')}\n\n")
-
-        self.status_text.insert(tk.END, "LEDs:\n")
-        for led in status.get("leds", []):
-            state_text = "ON" if led['state'] else "OFF"
-            self.status_text.insert(tk.END, f"  LED {led['id']}: {state_text}\n")
-            self.led_buttons[led['id'] - 1].set(led['state'])
-
-        self.status_text.insert(tk.END, "\nButtons:\n")
-        for btn in status.get("buttons", []):
-            status_text = "PRESSED" if btn['pressed'] else "released"
-            self.status_text.insert(tk.END, f"  Button {btn['id']}: {status_text}\n")
-
-        pot = status.get("potentiometer", {})
-        self.status_text.insert(tk.END, "\nPotentiometer:\n")
-        self.status_text.insert(tk.END, f"  Raw: {pot.get('raw', 0)}\n")
-        self.status_text.insert(tk.END, f"  Voltage: {pot.get('voltage', 0):.2f} V\n")
-        self.status_text.insert(tk.END, f"  Percent: {pot.get('percent', 0)} %\n")
+        self.client = ESP32Client(host, port, password)
         
-        servo = status.get("servo", {})
-        if servo:
-            self.status_text.insert(tk.END, "\nServo:\n")
-            self.status_text.insert(tk.END, f"  Angle: {servo.get('angle', 0)}°\n")
-            servo_angle = servo.get('angle', 90)
-            if servo_angle != self.current_servo_angle:
-                self.current_servo_angle = servo_angle
-                self.update_all_angle_displays(servo_angle)
+        if self.client.connect():
+            if self.client.authenticate():
+                self.connected = True
+                self.save_last_ip(host)
+                
+                # Update GUI
+                self.connect_btn.config(state="disabled")
+                self.disconnect_btn.config(state="normal")
+                self.status_label.config(text="Connected", foreground="green")
+                
+                # Start monitoring
+                self.client.start_monitoring(self.on_status_update)
+                
+                # Request initial status
+                self.client.get_status()
+                
+                self.log_message(f"Connected to ESP32 at {host}:{port}")
+            else:
+                self.client.close()
+                self.client = None
 
-        self.status_text.config(state="disabled")
+    def disconnect_from_esp32(self):
+        if not self.connected:
+            return
+
+        if self.client:
+            self.client.close()
+            self.client = None
+
+        self.connected = False
+        
+        # Update GUI
+        self.connect_btn.config(state="normal")
+        self.disconnect_btn.config(state="disabled")
+        self.status_label.config(text="Disconnected", foreground="red")
+        
+        self.log_message("Disconnected from ESP32")
+
+    def on_status_update(self, status):
+        """Handle incoming status updates from ESP32"""
+        self.root.after(0, self._update_gui_from_status, status)
+
+    def _update_gui_from_status(self, status):
+        """Update GUI elements based on received status (runs in main thread)"""
+        try:
+            # Update LED states
+            if "leds" in status:
+                for i, led in enumerate(status["leds"]):
+                    if i < len(self.led_vars):
+                        self.led_vars[i].set(led.get("state", False))
+
+            # Update potentiometer display
+            if "potentiometer" in status:
+                pot_data = status["potentiometer"]
+                
+                # Update gauge
+                percent = pot_data.get("percent", 0)
+                self.pot_gauge.set_value(percent)
+                
+                # Update labels
+                self.pot_raw_label.config(text=f"Raw Value: {pot_data.get('raw', '--')}")
+                self.pot_voltage_label.config(text=f"Voltage: {pot_data.get('voltage', '--'):.2f}V")
+                self.pot_percent_label.config(text=f"Percentage: {percent}%")
+
+            # Update servo angle
+            if "servo" in status:
+                angle = status["servo"].get("angle", 90)
+                self.current_servo_angle = angle
+                self.servo_angle_label.config(text=f"Current Angle: {angle}°")
+                
+                # Update servo controls (but don't trigger callbacks)
+                if not self.updating_servo_controls:
+                    self.updating_servo_controls = True
+                    self.servo_var.set(angle)
+                    self.servo_value_label.config(text=f"{angle}°")
+                    self.updating_servo_controls = False
+
+            # Update button states
+            if "buttons" in status:
+                for i, btn in enumerate(status["buttons"]):
+                    if i < len(self.button_labels):
+                        pressed = btn.get("pressed", False)
+                        state_text = "Pressed" if pressed else "Released"
+                        color = "lightcoral" if pressed else "lightgreen"
+                        self.button_labels[i].config(
+                            text=f"Button {i+1}: {state_text}",
+                            background=color
+                        )
+
+        except Exception as e:
+            print(f"GUI update error: {e}")
+
+    def toggle_led(self, led_number):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        state = self.led_vars[led_number-1].get()
+        self.client.control_led(led_number, state)
+        self.log_message(f"LED {led_number} {'ON' if state else 'OFF'}")
+
+    def control_all_leds(self, state):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        self.client.control_all_leds(state)
+        self.log_message(f"All LEDs {'ON' if state else 'OFF'}")
+
+    def trigger_led_sequence(self):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        self.log_message("Triggering LED sequence...")
+        threading.Thread(target=self.client.toggle_led_sequence, daemon=True).start()
+
+    def on_servo_scale_change(self, value):
+        if self.updating_servo_controls:
+            return
+            
+        angle = int(float(value))
+        self.servo_value_label.config(text=f"{angle}°")
+
+    def set_servo_angle(self, angle):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        self.updating_servo_controls = True
+        self.servo_var.set(angle)
+        self.servo_value_label.config(text=f"{angle}°")
+        self.updating_servo_controls = False
+
+        self.client.control_servo(angle)
+        self.log_message(f"Servo set to {angle}° (manual override)")
+
+    def request_status(self):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        self.client.get_status()
+        self.log_message("Status requested")
+
+    def ping_server(self):
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to ESP32 first")
+            return
+
+        self.client.ping()
+        self.log_message("Ping sent")
+
+    def clear_status(self):
+        self.status_text.delete(1.0, tk.END)
+
+    def log_message(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+        self.status_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.status_text.see(tk.END)
 
-    def save_last_ip(self, ip):
-        try:
-            with open(CONFIG_FILE, "w") as f:
-                f.write(ip)
-        except:
-            pass
-
-    def load_last_ip(self):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                return f.read().strip()
-        except:
-            return ""
+    def on_closing(self):
+        if self.connected:
+            self.disconnect_from_esp32()
+        self.root.destroy()
 
 
 def main():
     root = tk.Tk()
-    gui = ESP32GUI(root)
+    app = ESP32GUI(root)
     
-    root.update_idletasks()
-    x = (root.winfo_screenwidth() - root.winfo_width()) // 2
-    y = (root.winfo_screenheight() - root.winfo_height()) // 2
-    root.geometry(f"+{x}+{y}")
+    # Handle window close event
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
     
-    try:
-        root.mainloop()
-    finally:
-        if gui.client:
-            gui.client.close()
+    # Start the GUI
+    root.mainloop()
 
 
 if __name__ == "__main__":

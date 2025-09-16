@@ -3,25 +3,27 @@
  * 
  * Features:
  * - 5 LEDs controllable via network
- * - 5 Push buttons with debouncing
- * - 1 Potentiometer (analog input)
- * - WiFi Access Point mode
+ * - 5 Push buttons with debouncing (trigger LED sequence when pressed)
+ * - 1 Potentiometer controlling servo motor automatically
+ * - WiFi Station mode (connects to router)
  * - TCP Socket server with JSON communication
  * - Multi-client support with authentication
  * - Modular design (separate .h and .cpp files)
  * 
  * Network Configuration:
- * - WiFi AP: SECL RnD LAB / SECL@2024     // WiFi STA
- * - Server: 192.168.4.1:8080              // from serial monitor
+ * - WiFi STA: Connect to existing router
+ * - Server: IP assigned by router on port 8080
  * - Auth Password: IoTDevice2024
  * 
  * Hardware Connections:
  * LEDs:     GPIO 2, 4, 5, 18, 19
- * Buttons:  GPIO 12, 13, 14, 15, 16 (with internal pull-up)
- * Pot:      GPIO 34 (ADC1_CH6)
+ * Buttons:  GPIO 12, 13, 14, 15, 16 (with internal pull-up) - trigger LED sequence
+ * Pot:      GPIO 34 (ADC1_CH6) - controls servo motor
+ * Servo:    GPIO 23 - controlled by potentiometer
  * 
  * Required Libraries:
  * - ArduinoJson (install via Library Manager)
+ * - ESP32Servo (install via Library Manager)
  * 
  * File Structure:
  * - main.ino (this file)
@@ -37,6 +39,7 @@
 // Global objects
 HardwareModule hardware;
 CommunicationModule communication(&hardware);
+
 // Helper function to repeat a character
 String repeatChar(char c, int count) {
     String result = "";
@@ -55,6 +58,8 @@ void setup() {
 
     Serial.println("\n" + line);
     Serial.println("    ESP32 IoT Control System Starting...");
+    Serial.println("    Potentiometer -> Servo Control");
+    Serial.println("    Button Press -> LED Sequence");
     Serial.println(line);
     
     // Initialize hardware module
@@ -67,27 +72,31 @@ void setup() {
     
     // Startup LED sequence
     Serial.println("[MAIN] Running startup LED sequence...");
-    for (int i = 0; i < 5; i++) {
-        hardware.setLED(i, true);
-        delay(200);
-    }
-    delay(500);
-    for (int i = 0; i < 5; i++) {
-        hardware.setLED(i, false);
-        delay(200);
-    }
+    hardware.toggleLEDSequence();
     
     Serial.println("\n" + line);
     Serial.println("    ESP32 IoT Control System Ready!");
+    Serial.println("    Potentiometer controls servo automatically");
+    Serial.println("    Press any button to trigger LED sequence");
     Serial.println(line);
     Serial.println("[MAIN] System initialized successfully!");
-    Serial.println("[MAIN] Connect to WiFi and use client to control the system.");
     Serial.println();
 }
 
 void loop() {
-    // Update hardware (read sensors, debounce buttons)
+    // Update hardware (read sensors, debounce buttons, update servo)
     hardware.update();
+    
+    // Check for button presses and trigger LED sequence
+    for (int i = 0; i < 5; i++) {
+        if (hardware.isButtonPressed(i)) {
+            Serial.printf("[MAIN] Button %d pressed - starting LED sequence\n", i + 1);
+            
+            // Run LED sequence in a non-blocking way
+            // Note: This will block the main loop briefly, but it's acceptable for this demo
+            hardware.toggleLEDSequence();
+        }
+    }
     
     // Handle network communication
     communication.update();
@@ -104,7 +113,7 @@ void loop() {
 }
 
 /*
- * JSON API Documentation:
+ * Updated JSON API Documentation:
  * 
  * 1. Authentication (required first):
  *    Send: {"command":"auth","password":"IoTDevice2024"}
@@ -118,11 +127,16 @@ void loop() {
  *    Send: {"command":"set_all_leds","state":false}
  *    Response: {"status":"success","message":"All LEDs set to OFF","timestamp":12345}
  * 
- * 4. Get system status:
+ * 4. Manual servo control (overrides potentiometer temporarily):
+ *    Send: {"command":"set_servo","angle":90}
+ *    Response: {"status":"success","message":"Servo set to 90 degrees","timestamp":12345}
+ *    Note: Potentiometer will take control again on next update
+ * 
+ * 5. Get system status:
  *    Send: {"command":"get_status"}
  *    Response: Full status JSON (see automatic updates)
  * 
- * 5. Ping test:
+ * 6. Ping test:
  *    Send: {"command":"ping"}
  *    Response: {"status":"success","message":"pong","timestamp":12345}
  * 
@@ -144,6 +158,16 @@ void loop() {
  *     "raw": 2048,
  *     "voltage": 1.65,
  *     "percent": 50
+ *   },
+ *   "servo": {
+ *     "angle": 90
  *   }
  * }
+ * 
+ * System Behavior:
+ * - Potentiometer continuously controls servo motor position
+ * - Button presses trigger LED toggle sequence
+ * - Manual servo commands work but potentiometer takes over again
+ * - Smooth analog filtering prevents servo jitter
+ * - Deadband filtering reduces unnecessary servo movements
  */
