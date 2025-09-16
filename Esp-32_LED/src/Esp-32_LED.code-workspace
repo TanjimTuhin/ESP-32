@@ -2,6 +2,10 @@
 	"folders": [
 		{
 			"path": ".."
+		},
+		{
+			"name": "Servo",
+			"path": "../../Servo"
 		}
 	],
 	"settings": {}

@@ -93,7 +93,7 @@ void loop() {
     communication.update();
     
     // Small delay to prevent overwhelming the system
-    delay(10);
+    delay(1);
     
     // Optional: Print hardware status every 15 seconds for debugging
     static unsigned long lastStatusPrint = 0;

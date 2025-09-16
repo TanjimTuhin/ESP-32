@@ -180,6 +180,17 @@ void CommunicationModule::processClientMessage(int clientIndex, String message) 
         sendResponse(clientIndex, createResponseJson("success", 
                     "All LEDs set to " + String(state ? "ON" : "OFF")));
     }
+    else if (command == "set_servo") {  // Add servo command
+        int angle = jsonDoc["angle"];
+        
+        if (angle >= 0 && angle <= 180) {
+            hardware->setServoAngle(angle);
+            sendResponse(clientIndex, createResponseJson("success", 
+                        "Servo set to " + String(angle) + " degrees"));
+        } else {
+            sendResponse(clientIndex, createResponseJson("error", "Invalid angle (0-180)"));
+        }
+    }
     else if (command == "get_status") {
         sendResponse(clientIndex, createStatusJson());
     }
@@ -207,6 +218,7 @@ bool CommunicationModule::authenticateClient(int clientIndex, const String& pass
     return password.equals(auth_password);
 }
 
+// In createStatusJson() method, add servo status:
 String CommunicationModule::createStatusJson() {
     jsonDoc.clear();
     
@@ -234,6 +246,10 @@ String CommunicationModule::createStatusJson() {
     analog["raw"] = hardware->getAnalogValue();
     analog["voltage"] = hardware->getAnalogVoltage();
     analog["percent"] = hardware->getAnalogPercent();
+    
+    // Servo data - Add servo status
+    JsonObject servo = jsonDoc.createNestedObject("servo");
+    servo["angle"] = hardware->getServoAngle();
     
     serializeJson(jsonDoc, jsonBuffer);
     return String(jsonBuffer);

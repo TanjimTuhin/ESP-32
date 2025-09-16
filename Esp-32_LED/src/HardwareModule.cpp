@@ -40,6 +40,11 @@ void HardwareModule::init() {
     pinMode(POTENTIOMETER_PIN, INPUT);
     Serial.printf("[HW] Potentiometer initialized on pin %d\n", POTENTIOMETER_PIN);
     
+    // Initialize servo motor
+    servoMotor.attach(SERVO_PIN);  // Attach servo to pin
+    setServoAngle(90);             // Set to center position
+    Serial.printf("[HW] Servo motor initialized on pin %d (center position)\n", SERVO_PIN);
+
     // Fill initial analog readings
     for (int i = 0; i < ANALOG_SAMPLES; i++) {
         analogReadings[i] = analogRead(POTENTIOMETER_PIN);
@@ -49,6 +54,8 @@ void HardwareModule::init() {
     
     Serial.println("[HW] Hardware Module initialized successfully!");
 }
+
+
 
 void HardwareModule::update() {
     // Update button states with debouncing
@@ -85,6 +92,18 @@ void HardwareModule::setAllLEDs(bool state) {
     for (int i = 0; i < 5; i++) {
         setLED(i, state);
     }
+}
+
+// Add these methods to HardwareModule.cpp (anywhere after the update() method)
+
+void HardwareModule::setServoAngle(int angle) {
+    // Constrain angle to valid range (0-180 degrees)
+    angle = constrain(angle, 0, 180);
+    servoMotor.write(angle);
+}
+
+int HardwareModule::getServoAngle() {
+    return servoMotor.read();
 }
 
 bool HardwareModule::getLEDState(int ledNumber) {
@@ -145,5 +164,9 @@ void HardwareModule::printStatus() {
     // Analog Status
     Serial.printf("Potentiometer: %d (%.2fV, %d%%)\n", 
                   getAnalogValue(), getAnalogVoltage(), getAnalogPercent());
+    
+    // Servo Status - Add servo status
+    Serial.printf("Servo Angle: %d degrees\n", getServoAngle());              
+                  
     Serial.println("=====================\n");
 }

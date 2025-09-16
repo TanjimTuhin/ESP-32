@@ -2,6 +2,7 @@
 #define HARDWARE_MODULE_H
 
 #include <Arduino.h>
+#include <ESP32Servo.h>  // Add ESP32Servo library
 
 class HardwareModule {
 private:
@@ -9,7 +10,8 @@ private:
     static const int LED_PINS[5];
     static const int BUTTON_PINS[5];
     static const int POTENTIOMETER_PIN = 34; // ADC1_CH6
-    
+    static const int SERVO_PIN = 23;         // Add servo pin definition
+
     // Button debouncing
     bool buttonStates[5];
     bool lastButtonStates[5];
@@ -22,6 +24,9 @@ private:
     int analogIndex;
     long analogTotal;
     
+    // Servo object
+    Servo servoMotor;  // Add servo object
+
 public:
     HardwareModule();
     void init();
@@ -40,6 +45,10 @@ public:
     int getAnalogValue(); // Returns 0-4095
     float getAnalogVoltage(); // Returns voltage 0-3.3V
     int getAnalogPercent(); // Returns 0-100%
+    
+    // Servo Control - Add these methods
+    void setServoAngle(int angle);      // Set servo angle (0-180 degrees)
+    int getServoAngle();                // Get current servo angle
     
     // Status
     void printStatus();
