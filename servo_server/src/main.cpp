@@ -1,15 +1,17 @@
 #include <WiFi.h>
 #include <ESP32Servo.h>
-#include <ArduinoJson.h> 
+#include <ArduinoJson.h>
 
 // WiFi credentials
 const char* ssid = "Spectrum Eng.";
 const char* password = "Secl@2021";
 const int serverPort = 8080; // Match the Qt app's default port
 
-// Servo setup
-Servo myServo;
-const int servoPin = 23;
+// --- MODIFIED FOR 4 SERVOS ---
+const int NUM_SERVOS = 4;
+Servo myServos[NUM_SERVOS];
+// Assign GPIO pins for each servo. Make sure these pins are not used by other components.
+const int servoPins[NUM_SERVOS] = {23, 22, 21, 19}; 
 
 // TCP Server
 WiFiServer server(serverPort);
@@ -22,9 +24,13 @@ bool clientAuthenticated = false;
 void setup() {
     Serial.begin(115200);
 
-    // Initialize servo
-    myServo.attach(servoPin);
-    myServo.write(90); // Start at 90 degrees
+    // --- MODIFIED FOR 4 SERVOS ---
+    // Initialize all servos
+    for (int i = 0; i < NUM_SERVOS; i++) {
+        myServos[i].attach(servoPins[i]);
+        myServos[i].write(90); // Start all servos at 90 degrees
+    }
+    Serial.println("All 4 servos initialized.");
     
     // Connect to WiFi
     Serial.print("Connecting to WiFi");
@@ -66,7 +72,6 @@ void loop() {
         if (error) {
             Serial.print("deserializeJson() failed: ");
             Serial.println(error.c_str());
-            // Send error response back to client
             client.println("{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
             return;
         }
@@ -85,15 +90,20 @@ void loop() {
                 client.println("{\"status\":\"error\",\"message\":\"Authentication failed\"}");
                 client.stop();
             }
+        // --- MODIFIED FOR 4 SERVOS ---
         } else if (strcmp(command, "set_servo") == 0) {
             if (clientAuthenticated) {
+                // Get the servo index (0-3) and angle from the JSON message
+                int servo_index = doc["servo_index"];
                 int angle = doc["angle"];
-                if (angle >= 0 && angle <= 180) {
-                    myServo.write(angle);
-                    Serial.printf("Servo moved to %d degrees\n", angle);
+
+                // Validate the servo index and angle
+                if (servo_index >= 0 && servo_index < NUM_SERVOS && angle >= 0 && angle <= 180) {
+                    myServos[servo_index].write(angle);
+                    Serial.printf("Servo %d moved to %d degrees\n", servo_index, angle);
                     client.println("{\"status\":\"success\"}");
                 } else {
-                     client.println("{\"status\":\"error\",\"message\":\"Invalid angle\"}");
+                     client.println("{\"status\":\"error\",\"message\":\"Invalid servo index or angle\"}");
                 }
             } else {
                 Serial.println("Command rejected: client not authenticated.");
