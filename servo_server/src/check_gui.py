@@ -28,7 +28,7 @@ class ESP32ClientThread(threading.Thread):
 
     def run(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)   #what is this
             self.sock.settimeout(5.0)
             self.sock.connect((self.host, self.port))
             self.sock.settimeout(1.0)
